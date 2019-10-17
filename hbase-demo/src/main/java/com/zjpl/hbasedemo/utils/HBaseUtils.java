@@ -1,19 +1,22 @@
 package com.zjpl.hbasedemo.utils;
 
+import org.apache.commons.beanutils.BeanUtils;
 import org.apache.commons.beanutils.PropertyUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HColumnDescriptor;
-import org.apache.hadoop.hbase.HTableDescriptor;
-import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.*;
 import org.apache.hadoop.hbase.client.*;
+import org.apache.hadoop.hbase.client.coprocessor.AggregationClient;
+import org.apache.hadoop.hbase.client.coprocessor.LongColumnInterpreter;
+import org.apache.hadoop.hbase.filter.*;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.springframework.beans.BeanWrapper;
 import org.springframework.beans.PropertyAccessorFactory;
-import org.springframework.util.StringUtils;
+
 
 import java.beans.PropertyDescriptor;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
@@ -41,13 +44,14 @@ public class HBaseUtils {
         try {
             String hbaseConfigFile =null;
             //String env =
-            prop.load(HBaseUtils.class.getResourceAsStream(hbaseConfigFile));
-            String rootdir = prop.getProperty("hbase.rootDir");
-            String quorum =prop.getProperty("hbase.zkQuorum");
-            String zkBasePath = prop.getProperty("hbase.zkBasePath");
-            conf.set("hbase.zookeepeer.quorum",quorum);
-            conf.set("hbase.rootdir",rootdir);
-            conf.set("zookeeper.znode.parent",zkBasePath);
+           // prop.load(HBaseUtils.class.getResourceAsStream(hbaseConfigFile));
+           // String rootdir = prop.getProperty("hbase.rootDir");
+           // String quorum =prop.getProperty("hbase.zkQuorum");
+           // String zkBasePath = prop.getProperty("hbase.zkBasePath");
+            conf.set("hbase.zookeeper.quorum", "172.16.1.61,172.16.1.62,172.16.1.63");
+            conf.set("hbase.zookeeper.property.clientPort", "2181");
+           // conf.set("hbase.rootdir",rootdir);
+           // conf.set("zookeeper.znode.parent",zkBasePath);
             conf.set("hbase.client.pause","500");
             conf.set("hbase.client.retries.number","5");
             conf.set("hbase.rpc.timeout","9000");
@@ -85,6 +89,7 @@ public class HBaseUtils {
     public Connection getConn(){
         if(conn == null || conn.isClosed()){
             try {
+                System.out.println("hbase.zookeepeer.quorum===========>"+conf.get("hbase.zookeepeer.quorum"));
                 conn = ConnectionFactory.createConnection(conf);
             } catch (IOException e) {
                 e.printStackTrace();
@@ -100,13 +105,13 @@ public class HBaseUtils {
     public Configuration getConfiguration(){
         return conf;
     }
-    @SuppressWarnings("resource")
+   // @SuppressWarnings("resource")
     public boolean createTableBySplitKeys(String tableName, List<String> columnFamily,byte[][] splitKeys,boolean forceDeleteIfExist){
       Admin admin =null;
       TableName tableNameEntity = TableName.valueOf(tableName);
         try {
             admin = getConn().getAdmin();
-            if(StringUtils.isEmpty(tableName) || columnFamily ==null
+            if(StringUtils.isBlank(tableName) || columnFamily ==null
             || columnFamily.size() <0){
 
             }
@@ -130,6 +135,14 @@ public class HBaseUtils {
         return true;
     }
 
+    /**
+     * 批量插入
+     * @param tableName
+     * @param columnFamilyName
+     * @param rowKey
+     * @param objectList
+     * @throws IOException
+     */
     public void saveOrUpdateObjectList2HBase(String tableName,String columnFamilyName,String rowKey,List<Object> objectList) throws IOException {
         conn = getConn();
         Table table = conn.getTable(TableName.valueOf(tableName));
@@ -144,7 +157,7 @@ public class HBaseUtils {
                 System.out.println("properName = ["+properName+"]");
                 String value =(String) beanWrapper.getPropertyValue(properName);
                 System.out.println("value =["+value+"]");
-                if(!StringUtils.isEmpty(value)){
+                if(!StringUtils.isBlank(value)){
                     Put put = new Put(Bytes.toBytes(rowKey));
                     put.addColumn(Bytes.toBytes(columnFamilyName),Bytes.toBytes(properName),Bytes.toBytes(value));
                     putList.add(put);
@@ -171,6 +184,15 @@ public class HBaseUtils {
             }
         });
     }
+
+    /**
+     * 批量插入
+     * @param tableName
+     * @param columnFamilyName
+     * @param rowKey
+     * @param object
+     * @throws IOException
+     */
     public void saveOrUpdateObject2HBase(String tableName,String columnFamilyName,String rowKey,Object object) throws IOException {
         conn = getConn();
         Table table = conn.getTable(TableName.valueOf(tableName));
@@ -184,7 +206,7 @@ public class HBaseUtils {
                 continue;
             System.out.println("properName = ["+properName+"]");
             String value =(String)beanWrapper.getPropertyValue(properName);
-            if(!StringUtils.isEmpty(value)){
+            if(!StringUtils.isBlank(value)){
                 put = new Put(Bytes.toBytes(rowKey));
                 put.addColumn(Bytes.toBytes(columnFamilyName),
                         Bytes.toBytes(properName),
@@ -206,5 +228,275 @@ public class HBaseUtils {
         }finally {
             table.close();
         }
+    }
+
+    /**
+     * 根据rowkey List 批量查询
+     * @param rowkeyList
+     * @param tableName
+     * @return
+     */
+    public List<String> qurryTableBatch(List<String> rowkeyList,String tableName) throws IOException {
+        List<Get> getList = new ArrayList();
+        List dataList = new ArrayList();
+        Table table = getConn().getTable(TableName.valueOf(tableName));
+        for (String rowkey : rowkeyList) {
+            Get get = new Get(Bytes.toBytes(rowkey));
+            getList.add(get);
+        }
+        Result[] results = table.get(getList);
+        for (Result result : results) {
+            //对返回的结果集进行操作
+            for (Cell cell : result.rawCells()) {
+                String value = Bytes.toString(CellUtil.cloneValue(cell));
+                dataList.add(value);
+            }
+        }
+        return dataList;
+    }
+    public List<Object> queryDataObjByRowkeyList(List<String> rowkeyList,String tableName,Class objClass) throws Exception {
+        List<Get> getList = new ArrayList<>();
+        List dataList = new ArrayList();
+        Table table = getConn().getTable(TableName.valueOf(tableName));
+        for (String rowkey : rowkeyList) {
+            //先把rowkey 加到get里，再把get装list中
+            Get get = new Get(Bytes.toBytes(rowkey));
+            getList.add(get);
+        }
+        Result[] results = table.get(getList); //重点在这，直接查getList<Get>
+        List<Object> dataResult = new ArrayList<>();
+        for (Result result : results) {
+            //对返回的结果集进行操作
+            Object obj = objClass.newInstance();
+            Object objResult = convertHbaseResult2Obj(result,obj);
+            dataResult.add(objResult);
+        }
+        return dataResult;
+    }
+
+    private Object convertHbaseResult2Obj(Result result, Object obj) throws InvocationTargetException, IllegalAccessException {
+        String qualifier =null;
+        String value =null;
+        String rowkey =null;
+        for (Cell cell : result.listCells()) {
+            Bytes.toString(CellUtil.cloneFamily(cell));
+            rowkey = Bytes.toString(CellUtil.cloneRow(cell));
+            qualifier = Bytes.toString(CellUtil.cloneQualifier(cell));
+            value = Bytes.toString(CellUtil.cloneValue(cell));
+            if(!StringUtils.isBlank(value)){
+                BeanUtils.setProperty(obj,qualifier,value);
+                BeanUtils.setProperty(obj,"rowkey",rowkey);
+            }
+        }
+        return  obj;
+    }
+
+    /**
+     * 单条插入数据
+     * @param tableName
+     * @param rowkey
+     * @param columnFamily
+     * @param column
+     * @param data
+     * @throws IOException
+     */
+    public void putData(String tableName,String rowkey,String columnFamily,String column,String data) throws IOException {
+        Table table = getConn().getTable(TableName.valueOf(tableName));
+        try{
+            Put put = new Put(Bytes.toBytes(rowkey));
+            put.addColumn(Bytes.toBytes(columnFamily),Bytes.toBytes(column),Bytes.toBytes(data));
+            table.put(put);
+        }finally {
+            table.close();
+        }
+    }
+
+    ThreadLocal<List<Put>> threadLocal = new ThreadLocal<List<Put>>();
+
+    /**
+     * 批量添加记录到HBase表，同一线程要保证对相同表进行添加操作
+     * @param tableName
+     * @param rowkey
+     * @param cf
+     * @param column
+     * @param value
+     */
+    public void bulkput(String tableName,String rowkey,String cf,String column,String value) throws IOException {
+        HTable table = (HTable) getConn().getTable(TableName.valueOf(tableName));
+        try{
+            List<Put> list = threadLocal.get();
+            if(list ==null){
+                list = new ArrayList<Put>();
+            }
+            Put put = new Put(Bytes.toBytes(rowkey));
+            put.addColumn(Bytes.toBytes(cf),Bytes.toBytes(column),Bytes.toBytes(value));
+            list.add(put);
+            if(list.size() >= 500){
+                //超过500条数据，批量提交
+
+                System.out.println("begin to batch put list");
+                table.put(list);
+                list.clear();
+            }else{
+                threadLocal.set(list);
+            }
+        }finally {
+            table.close();
+        }
+
+    }
+
+    /**
+     * 起始值和终止值查询
+     * @param tableName
+     * @param startKey
+     * @param stopKey
+     * @param num
+     * @return
+     * @throws IOException
+     */
+    public List<Result> getStartEndRow(final String tableName,final String startKey,final String stopKey,final int num) throws IOException {
+        List<Result> list = new ArrayList<>();
+        FilterList fl = new FilterList(FilterList.Operator.MUST_PASS_ALL);
+        if(num >0){
+            //过滤获取的条数
+            Filter filterNum = new PageFilter(num); //每页展示条数
+            fl.addFilter(filterNum);
+        }
+        //过滤器的添加
+        Scan scan = new Scan();
+        scan.setStartRow(startKey.getBytes());
+        scan.setStopRow(stopKey.getBytes());
+        scan.setFilter(fl); //为查询设置过滤器的list
+        HTable table = (HTable) getConn().getTable(TableName.valueOf(tableName));
+        ResultScanner resultScanner = table.getScanner(scan);
+        for (Result result : resultScanner) {
+            list.add(result);
+        }
+        return list;
+    }
+
+    /**
+     * 前缀查询
+     * @param tableName
+     * @param prefixStr
+     * @param num
+     * @return
+     * @throws IOException
+     */
+    public List<Result> getPrefixRow(final String tableName,final String prefixStr,int num) throws IOException {
+        List<Result> list = new ArrayList<>();
+        FilterList fl = new FilterList(FilterList.Operator.MUST_PASS_ALL);
+        Filter prefixFilter = new RowFilter(CompareFilter.CompareOp.EQUAL,
+                new BinaryPrefixComparator(prefixStr.getBytes()));
+        if(num>0){
+            //过滤获取的条数
+            Filter filterNum = new PageFilter(num);//每页展示条数
+            fl.addFilter(filterNum);
+        }
+        //过滤器的添加
+        fl.addFilter(prefixFilter);
+        Scan scan = new Scan();
+        scan.setFilter(fl); //为查询设置过滤器的list
+        HTable table = (HTable) getConn().getTable(TableName.valueOf(tableName));
+        ResultScanner resultScanner = table.getScanner(scan);
+        for (Result result : resultScanner) {
+            list.add(result);
+        }
+        return list;
+    }
+
+    /**
+     * 单条查询GET
+     * @param tableName
+     * @param rowkey
+     * @return
+     * @throws IOException
+     */
+    public Result getDataByRowKey(String tableName,String rowkey) throws IOException {
+        HTable table = (HTable) getConn().getTable(TableName.valueOf(tableName));
+        Get get = new Get(rowkey.getBytes());
+        Result result = table.get(get);
+        return result;
+    }
+
+    /**
+     * 查询全量数据
+     * @param tableName
+     * @return
+     * @throws IOException
+     */
+    public List<Result> getAllData(String tableName) throws IOException {
+        HTable table = (HTable) getConn().getTable(TableName.valueOf(tableName));
+        Scan scan = new Scan();
+        ResultScanner resultScanner = table.getScanner(scan);
+        List<Result> list = new ArrayList<>();
+        for (Result result : resultScanner) {
+            list.add(result);
+        }
+        return list;
+    }
+
+    /**
+     * 根据rowKey删除数据
+     * @param tableName
+     * @param rowKey
+     * @throws IOException
+     */
+    public void delDataByRowKey(String tableName,String rowKey) throws IOException {
+        HTable table = (HTable) conn.getTable(TableName.valueOf(tableName));
+        Delete delete = new Delete(Bytes.toBytes(rowKey));
+        table.delete(delete);
+        table.close();
+    }
+
+    /**
+     * 创建非预分区表
+     * @param tableName
+     * @param columnFamily
+     */
+    public boolean createTable(String tableName,List<String> columnFamily,Integer maxVersion,Boolean forceDeleteIfExist) throws IOException {
+        Admin admin =null;
+        TableName tableNameEntity = TableName.valueOf(tableName);
+        try {
+            admin = getConn().getAdmin();
+            if(StringUtils.isBlank(tableName) || columnFamily ==null
+                    || columnFamily.size() <0){
+
+            }
+            //判断表是否存在
+            if(admin.tableExists(tableNameEntity)){
+                if(forceDeleteIfExist){
+                    admin.disableTable(tableNameEntity);
+                    admin.deleteTable(tableNameEntity);
+                }else{
+                    return true;
+                }
+            }
+            HTableDescriptor tableDescriptor =new HTableDescriptor(TableName.valueOf(tableName));
+            for (String cf : columnFamily) {
+                HColumnDescriptor hColumnDescriptor = new HColumnDescriptor(cf);
+                hColumnDescriptor.setMaxVersions(maxVersion);
+                tableDescriptor.addFamily(hColumnDescriptor);
+            }
+            admin.createTable(tableDescriptor);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return true;
+    }
+    //大表的count非常慢，通过这种方式计算行数
+    public static long rowCount(String tableName){
+        long rowCount = 0;
+       // @SuppressWarnings("resource")
+        AggregationClient aggregationClient = new AggregationClient(conf);
+        Scan scan = new Scan();
+        try {
+            rowCount =aggregationClient.rowCount(TableName.valueOf(tableName),
+                    new LongColumnInterpreter(),scan);
+        } catch (Throwable throwable) {
+            throwable.printStackTrace();
+        }
+        return rowCount;
     }
 }
