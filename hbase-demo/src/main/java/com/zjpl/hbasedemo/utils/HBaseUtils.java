@@ -33,23 +33,19 @@ public class HBaseUtils {
     private static Connection conn;
     private static HBaseUtils hBaseUtils;
     private static Properties prop;
-    private static String springApplicationXML="application.yml";
 
     /**
      * 1.初始化HBASE
      */
     public void init(){
         conf = HBaseConfiguration.create();
-        prop = new Properties();
         try {
-            String hbaseConfigFile =null;
-            //String env =
-           // prop.load(HBaseUtils.class.getResourceAsStream(hbaseConfigFile));
-           // String rootdir = prop.getProperty("hbase.rootDir");
-           // String quorum =prop.getProperty("hbase.zkQuorum");
+            YmlUtil ymlUtil = new YmlUtil();
+            String quorum =ymlUtil.getStrYmlValue("hbase.zookeeper.quorum");
+            String hbasePort = ymlUtil.getStrYmlValue("hbase.zookeeper.property.clientPort");
            // String zkBasePath = prop.getProperty("hbase.zkBasePath");
-            conf.set("hbase.zookeeper.quorum", "172.16.1.61,172.16.1.62,172.16.1.63");
-            conf.set("hbase.zookeeper.property.clientPort", "2181");
+            conf.set("hbase.zookeeper.quorum", quorum);
+            conf.set("hbase.zookeeper.property.clientPort", hbasePort);
            // conf.set("hbase.rootdir",rootdir);
            // conf.set("zookeeper.znode.parent",zkBasePath);
             conf.set("hbase.client.pause","500");
@@ -358,15 +354,15 @@ public class HBaseUtils {
     public List<Result> getStartEndRow(final String tableName,final String startKey,final String stopKey,final int num) throws IOException {
         List<Result> list = new ArrayList<>();
         FilterList fl = new FilterList(FilterList.Operator.MUST_PASS_ALL);
-        if(num >0){
-            //过滤获取的条数
-            Filter filterNum = new PageFilter(num); //每页展示条数
-            fl.addFilter(filterNum);
-        }
+//        if(num >0){
+//            //过滤获取的条数
+//            Filter filterNum = new PageFilter(num); //每页展示条数
+//            fl.addFilter(filterNum);
+//        }
         //过滤器的添加
         Scan scan = new Scan();
-        scan.setStartRow(startKey.getBytes());
-        scan.setStopRow(stopKey.getBytes());
+        scan.setStartRow(Bytes.toBytes(startKey));
+        scan.setStopRow(Bytes.toBytes(stopKey));
         scan.setFilter(fl); //为查询设置过滤器的list
         HTable table = (HTable) getConn().getTable(TableName.valueOf(tableName));
         ResultScanner resultScanner = table.getScanner(scan);
@@ -388,7 +384,7 @@ public class HBaseUtils {
         List<Result> list = new ArrayList<>();
         FilterList fl = new FilterList(FilterList.Operator.MUST_PASS_ALL);
         Filter prefixFilter = new RowFilter(CompareFilter.CompareOp.EQUAL,
-                new BinaryPrefixComparator(prefixStr.getBytes()));
+                new BinaryPrefixComparator(Bytes.toBytes(prefixStr)));
         if(num>0){
             //过滤获取的条数
             Filter filterNum = new PageFilter(num);//每页展示条数
